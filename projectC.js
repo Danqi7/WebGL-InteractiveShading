@@ -263,6 +263,12 @@ var lamp0 = new LightsT();
 var matlSel= MATL_RED_PLASTIC;				// see keypress(): 'm' key changes matlSel
 var matl0 = new Material(matlSel);	
 
+var floatsPerVertex = 8;
+var ANGLE_STEP = 45.0;
+var currentAngle = 0;
+
+
+
 // ---------------END of global vars----------------------------
 
 //=============================================================================
@@ -375,7 +381,59 @@ function main() {
   // 					function, not main(), so they ALWAYS get updated before each
   //					on-screen re-drawing)
   
-	draw();
+
+
+	var tick = function() {
+    currentAngle = animate(currentAngle);  
+    winResize();
+    //draw(gl, currentAngle, u_ViewMatrix, viewMatrix, ModelMatrix, u_ModelMatrix, normalMatrix, u_NormalMatrix, projMatrix, u_ProjMatrix);   // Draw shapes
+  // console.log('currentAngle=',currentAngle); // put text in console.
+    requestAnimationFrame(tick, canvas);   
+                      // Request that the browser re-draw the webpage
+                      // (causes webpage to endlessly re-draw itself)
+  };
+  tick();
+}
+
+function winResize() {
+//==============================================================================
+// Called when user re-sizes their browser window , because our HTML file
+// contains:  <body onload="main()" onresize="winResize()">
+
+  var nuCanvas = document.getElementById('webgl');  // get current canvas
+  // var nuGL = getWebGLContext(nuCanvas);             // and context:
+
+  //Report our current browser-window contents:
+
+  // console.log('nuCanvas width,height=', nuCanvas.width, nuCanvas.height);   
+ // console.log('Browser window: innerWidth,innerHeight=', 
+                                // innerWidth, innerHeight); // http://www.w3schools.com/jsref/obj_window.asp
+
+  
+  //Make canvas fill the top 3/4 of our browser window:
+  nuCanvas.width = Math.min(innerWidth*0.75, innerHeight*1.5);
+  nuCanvas.height = Math.min(innerWidth*0.75/2, innerHeight*0.75);
+  //IMPORTANT!  need to re-draw screen contents
+  draw();
+}
+
+// Record the last time we called 'animate()':  (used for animation timing)
+var g_last = Date.now();
+function animate(angle) 
+{
+//==============================================================================
+  // Calculate the elapsed time
+  var now = Date.now();
+  var elapsed = now - g_last;
+  g_last = now;
+  
+  // Update the current rotation angle (adjusted by the elapsed time)
+  //  limit the angle to move smoothly between +20 and -85 degrees:
+  if(angle >  120.0 && ANGLE_STEP > 0) ANGLE_STEP = -ANGLE_STEP;
+  if(angle < -120.0 && ANGLE_STEP < 0) ANGLE_STEP = -ANGLE_STEP;
+  
+  var newAngle = angle + (ANGLE_STEP * elapsed) / 1000.0;
+  return newAngle %= 360;
 }
 
 function draw() {
@@ -402,8 +460,19 @@ function draw() {
 //	console.log('matl0.K_emit', matl0.K_emit.slice(0,3), '\n');
 //	console.log('matl0.uLoc_Ke', matl0.uLoc_Ke, '\n'); //
 
+	gl.viewport(0,                              // Viewport lower-left corner
+                0,                              // (x,y) location(in pixels)
+              //gl.drawingBufferWidth/2,
+              canvas.width,        // viewport width, height.
+              //gl.drawingBufferHeight/2
+              canvas.height);
+
+  pushMatrix(modelMatrix);
+  pushMatrix(mvpMatrix);
   //----------------For the Matrices: find the model matrix:
-  modelMatrix.setRotate(90, 0, 1, 0); // Rotate around the y-axis
+  modelMatrix.setTranslate(1,2,-1.0);
+  modelMatrix.rotate(25,0,1,0);
+  modelMatrix.scale(0.5,0.5,0.5);
   // Calculate the view projection matrix
   mvpMatrix.setPerspective(30, canvas.width/canvas.height, 1, 100);
   mvpMatrix.lookAt(	eyePosWorld[0], eyePosWorld[1], eyePosWorld[2], // eye pos
@@ -423,72 +492,262 @@ function draw() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
   // Draw the cube
-  gl.drawElements(gl.TRIANGLES, n_vcount, gl.UNSIGNED_SHORT, 0);
+  //gl.drawElements(gl.TRIANGLES, n_vcount, gl.UNSIGNED_SHORT, 0);
+  gl.drawArrays(gl.TRIANGLES,
+  				armStart/floatsPerVertex,
+  				armVerts.length/floatsPerVertex);
+
+  /*mvpMatrix = popMatrix();
+  modelMatrix = popMatrix();
+  pushMatrix(modelMatrix);
+  pushMatrix(mvpMatrix);*/
+  //modelMatrix.setIdentity();
+  //mvpMatrix.setIdentity();
+  //mvpMatrix.multiply(modelMatrix);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+  //gl.uniformMatrix4fv(uLoc_MvpMatrix, false, mvpMatrix.elements);
+  
+  //mvpMatrix.rotate(90.0, 1,0,0);
+  mvpMatrix.rotate(-90,0,1,0);
+
+  mvpMatrix.translate(0.0, 0.0, -0.6);
+  mvpMatrix.scale(0.4, 0.4,0.4);
+  
+  gl.uniformMatrix4fv(uLoc_MvpMatrix, false, mvpMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+
+  gl.drawArrays(gl.LINES,
+  				gndStart/floatsPerVertex,
+  				gndVerts.length/floatsPerVertex);  
+
+  //mvpMatrix = popMatrix();
+  //modelMatrix = popMatrix();
+
+
 }
 
-function initVertexBuffers(gl) { // Create a sphere
-//-------------------------------------------------------------------------------
-  var SPHERE_DIV = 13; //default: 13.  JT: try others: 11,9,7,5,4,3,2,
+function makeGroundGrid() {
+//==============================================================================
+// Create a list of vertices that create a large grid of lines in the x,y plane
+// centered at x=y=z=0.  Draw this shape using the GL_LINES primitive.
 
-  var i, ai, si, ci;
-  var j, aj, sj, cj;
-  var p1, p2;
-
-  var positions = [];
-  var indices = [];
-
-  // Generate coordinates
-  for (j = 0; j <= SPHERE_DIV; j++) {
-    aj = j * Math.PI / SPHERE_DIV;
-    sj = Math.sin(aj);
-    cj = Math.cos(aj);
-    for (i = 0; i <= SPHERE_DIV; i++) {
-      ai = i * 2 * Math.PI / SPHERE_DIV;
-      si = Math.sin(ai);
-      ci = Math.cos(ai);
-
-      positions.push(si * sj);  // X
-      positions.push(cj);       // Y
-      positions.push(ci * sj);  // Z
-    }
-  }
-
-  // Generate indices
-  for (j = 0; j < SPHERE_DIV; j++) {
-    for (i = 0; i < SPHERE_DIV; i++) {
-      p1 = j * (SPHERE_DIV+1) + i;
-      p2 = p1 + (SPHERE_DIV+1);
-
-      indices.push(p1);
-      indices.push(p2);
-      indices.push(p1 + 1);
-
-      indices.push(p1 + 1);
-      indices.push(p2);
-      indices.push(p2 + 1);
-    }
-  }
-
-  // Write the vertex property to buffers (coordinates and normals)
-  // Use the same data for each vertex and its normal because the sphere is
-  // centered at the origin, and has radius of 1.0.
-  // We create two separate buffers so that you can modify normals if you wish.
-  if (!initArrayBuffer(gl, 'a_Position', new Float32Array(positions), gl.FLOAT, 3)) return -1;
-  if (!initArrayBuffer(gl, 'a_Normal', new Float32Array(positions), gl.FLOAT, 3))  return -1;
+  var xcount = 100;     // # of lines to draw in x,y to make the grid.
+  var ycount = 100;   
+  var xymax = 100.0;     // grid size; extends to cover +/-xymax in x and y.
+  var xColr = new Float32Array([1.0, 1.0, 0.3]);  // bright yellow
+  var yColr = new Float32Array([0.5, 1.0, 0.5]);  // bright green.
   
-  // Unbind the buffer object
-  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  // Create an (global) array to hold this ground-plane's vertices:
+  gndVerts = new Float32Array(floatsPerVertex*2*(xcount+ycount));
+            // draw a grid made of xcount+ycount lines; 2 vertices per line.
+            
+  var xgap = xymax/(xcount-1);    // HALF-spacing between lines in x,y;
+  var ygap = xymax/(ycount-1);    // (why half? because v==(0line number/2))
+  
+  // First, step thru x values as we make vertical lines of constant-x:
+  for(v=0, j=0; v<2*xcount; v++, j+= floatsPerVertex) {
+    if(v%2==0) {  // put even-numbered vertices at (xnow, -xymax, 0)
+      gndVerts[j  ] = -xymax + (v  )*xgap;  // x
+      gndVerts[j+1] = -xymax;               // y
+      gndVerts[j+2] = 0.0;                  // z
+    }
+    else {        // put odd-numbered vertices at (xnow, +xymax, 0).
+      gndVerts[j  ] = -xymax + (v-1)*xgap;  // x
+      gndVerts[j+1] = xymax;                // y
+      gndVerts[j+2] = 0.0;                  // z
+    }
+    gndVerts[j+3] = 1.0;  //w
+    //gndVerts[j+4] = xColr[0];     // red
+   // gndVerts[j+5] = xColr[1];     // grn
+    //gndVerts[j+6] = xColr[2];     // blu
+    gndVerts[j+4] = 0;
+    gndVerts[j+5] = 0;
+    gndVerts[j+6] = 1;
+    gndVerts[j+7] = 0;
+  }
+  // Second, step thru y values as wqe make horizontal lines of constant-y:
+  // (don't re-initialize j--we're adding more vertices to the array)
+  for(v=0; v<2*ycount; v++, j+= floatsPerVertex) {
+    if(v%2==0) {    // put even-numbered vertices at (-xymax, ynow, 0)
+      gndVerts[j  ] = -xymax;               // x
+      gndVerts[j+1] = -xymax + (v  )*ygap;  // y
+      gndVerts[j+2] = 0.0;                  // z
+    }
+    else {          // put odd-numbered vertices at (+xymax, ynow, 0).
+      gndVerts[j  ] = xymax;                // x
+      gndVerts[j+1] = -xymax + (v-1)*ygap;  // y
+      gndVerts[j+2] = 0.0;                  // z
+    }
+    gndVerts[j+3] = 1.0;  //w
+    //gndVerts[j+4] = yColr[0];     // red
+    //gndVerts[j+5] = yColr[1];     // grn
+    //gndVerts[j+6] = yColr[2];     // blu
+    gndVerts[j+4] = 0;
+    gndVerts[j+5] = 0;
+    gndVerts[j+6] = 1;
+    gndVerts[j+7] = 0;
+  }
+}
 
-  // Write the indices to the buffer object
-  var indexBuffer = gl.createBuffer();
-  if (!indexBuffer) {
+
+function makeRoboticarm()
+{
+//make a list of vertces that make robotic arms
+armVerts = new Float32Array([
+     //0,1,2
+     0.25,   0.50,   0.25, 1.0,   0,0,1,0, // v0 White
+    -0.25,   0.50,   0.25, 1.0,   0,0,1,0, // v1 Magenta
+    -0.25,  -0.50,   0.25, 1.0,   0,0,1,0, // v2 Red
+    //0,2,3
+     0.25,   0.50,   0.25, 1.0,   0,0,1,0,
+    -0.25,  -0.50,   0.25, 1.0,   0,0,1,0,
+     0.25,  -0.50,   0.25, 1.0,   0,0,1,0,
+
+     //0,3,4
+     0.25,   0.50,   0.25, 1.0,   1,0,0,0,
+     0.25,  -0.50,   0.25, 1.0,   1,0,0,0,
+     0.25,  -0.50,  -0.25, 1.0,   1,0,0,0,
+
+     //0,4,5
+     0.25,   0.50,   0.25, 1.0,    1,0,0,0,
+     0.25,  -0.50,  -0.25, 1.0,    1,0,0,0,
+     0.25,   0.50,  -0.25, 1.0,    1,0,0,0,
+
+     //0, 5, 6,  
+     0.25,   0.50,   0.25, 1.0,      0,1,0,0,
+     0.25,   0.50,  -0.25, 1.0,      0,1,0,0,
+     -0.25,  0.50,  -0.25, 1.0,      0,1,0,0,
+
+     //0, 6, 1,
+      0.25,   0.50,   0.25, 1.0,    0,1,0,0,
+     -0.25,   0.50,  -0.25, 1.0,    0,1,0,0,
+     -0.25,   0.50,   0.25, 1.0,    0,1,0,0,
+
+     //1, 6, 7, 
+     -0.25,   0.50,   0.25, 1.0,        -1,0,0,0,   
+     -0.25,   0.50,  -0.25, 1.0,        -1,0,0,0,
+     -0.25,  -0.50,  -0.25, 1.0,        -1,0,0,0,
+
+     //1, 7, 2, 
+     -0.25,   0.50,   0.25, 1.0,        -1,0,0,0,
+     -0.25,  -0.50,  -0.25, 1.0,        -1,0,0,0,
+     -0.25,  -0.50,   0.25, 1.0,        -1,0,0,0,
+
+     //7, 4, 3,
+     -0.25,  -0.50,  -0.25, 1.0,         0,-1,0,0,
+      0.25,  -0.50,  -0.25, 1.0,         0,-1,0,0,
+      0.25,  -0.50,   0.25, 1.0,         0,-1,0,0,
+
+     //7, 3, 2,
+     -0.25,  -0.50,  -0.25, 1.0,        0,-1,0,0,
+      0.25,  -0.50,   0.25, 1.0,        0,-1,0,0,
+     -0.25,  -0.50,   0.25, 1.0,        0,-1,0,0,
+
+     //4, 7, 6,
+      0.25,  -0.50,  -0.25, 1.0,         0,0,-1,0,
+     -0.25,  -0.50,  -0.25, 1.0,         0,0,-1,0,
+     -0.25,   0.50,  -0.25, 1.0,         0,0,-1,0,
+
+     //4, 6, 5,
+      0.25,  -0.50,  -0.25,  1.0,     0,0,-1,0,
+     -0.25,   0.50,  -0.25,  1.0,     0,0,-1,0,
+      0.25,   0.50,  -0.25,  1.0,     0,0,-1,0,
+     //0,2,3
+
+
+     //0.25,  -0.50,   0.25,     1.0,  1.0,  0.0,  // v3 Yellow
+     //0.25,  -0.50,  -0.25,     0.0,  1.0,  0.0,  // v4 Green
+     //0.25,   0.50,  -0.25,     0.0,  1.0,  1.0,  // v5 Cyan
+   // -0.25,   0.50,  -0.25,     0.0,  0.0,  1.0,  // v6 Blue
+    //-0.25,  -0.50,  -0.25,     0.0,  0.0,  0.0,   // v7 Black
+  ]);
+
+console.log("what the heck: ", armVerts.length);
+
+
+}
+
+function initVertexBuffers(gl) {
+//==============================================================================
+  
+  // Make our 'ground plane'; can you make a'torus' shape too?
+  // (recall the 'basic shapes' starter code...)
+  makeGroundGrid();
+  makeRoboticarm();
+  
+
+  // How much space to store all the shapes in one array?
+  // (no 'var' means this is a global variable)
+  mySiz = gndVerts.length + armVerts.length;
+
+  //console.log("forestVerts numeber is ", forestVerts.length);
+   console.log("gndVerts numeber is ", gndVerts.length);
+   console.log("armVerts numeber is ", armVerts.length);
+
+  // How many vertices total?
+  var nn = mySiz / floatsPerVertex;
+  console.log('nn is', nn, 'mySiz is', mySiz, 'floatsPerVertex is', floatsPerVertex);
+
+  // Copy all shapes into one big Float32 array:
+  var verticesColors = new Float32Array(mySiz);
+  // Copy them:  remember where to start for each shape:
+  gndStart = 0;           // next we'll store the ground-plane;
+  for(i=0,j=0; j< gndVerts.length; i++, j++) {
+    verticesColors[i] = gndVerts[j];
+    }
+  armStart = i;
+  for (j=0; j < armVerts.length; i++,j++)
+  {
+    verticesColors[i] = armVerts[j];
+  }
+
+  // Create a vertex buffer object (VBO)
+  var vertexColorbuffer = gl.createBuffer();  
+  if (!vertexColorbuffer) {
     console.log('Failed to create the buffer object');
     return -1;
   }
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
 
-  return indices.length;
+  // Write vertex information to buffer object
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertexColorbuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, verticesColors, gl.STATIC_DRAW);
+
+  var FSIZE = verticesColors.BYTES_PER_ELEMENT;
+
+  // Assign the buffer object to a_Position and enable the assignment
+  var a_Position = gl.getAttribLocation(gl.program, 'a_Position');
+  if(a_Position < 0) {
+    console.log('Failed to get the storage location of a_Position');
+    return -1;
+  }
+  gl.vertexAttribPointer(a_Position, 4, gl.FLOAT, false, FSIZE * 8, 0);
+  gl.enableVertexAttribArray(a_Position);
+  
+
+
+  var a_Normal = gl.getAttribLocation(gl.program, 'a_Normal');
+  if(a_Normal < 0) {
+    console.log('Failed to get the storage location of a_Normal');
+    return -1;
+  }
+
+  // Use handle to specify how to retrieve color data from our VBO:
+  gl.vertexAttribPointer(
+    a_Normal,        // choose Vertex Shader attribute to fill with data
+    4,              // how many values? 1,2,3 or 4. (we're using R,G,B)
+    gl.FLOAT,       // data type for each value: usually gl.FLOAT
+    false,          // did we supply fixed-point data AND it needs normalizing?
+    FSIZE * 8,       // Stride -- how many bytes used to store each vertex?
+                    // (x,y,z,w, r,g,b) * bytes/value
+    FSIZE * 4);     // Offset -- how many bytes from START of buffer to the
+                    // value we will actually use?  Need to skip over x,y,z,w
+                    
+  gl.enableVertexAttribArray(a_Normal);  
+
+  // Unbind the buffer object 
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+  return mySiz/floatsPerVertex; // return # of vertices
 }
 
 function initArrayBuffer(gl, attribute, data, type, num) {
@@ -734,5 +993,32 @@ function myKeyPress(ev) {
 													', metaKey(Command key or Windows key)='+ev.metaKey);
 		break;
 	}
+}
+
+var g_EyeX = 0.0, g_EyeY = 0.25, g_EyeZ = 4.25; 
+
+
+function MoveLeft() {
+//------------------------------------------------------
+//HTML calls this'Event handler' or 'callback function' when we press a key:
+
+    if(ev.keyCode == 39) { // The right arrow key was pressed
+//      g_EyeX += 0.01;
+        g_EyeX += 0.05;    // INCREASED for perspective camera)
+    } else 
+    if (ev.keyCode == 37) { // The left arrow key was pressed
+//      g_EyeX -= 0.01;
+        g_EyeX -= 0.05;    // INCREASED for perspective camera)
+    } // Prevent the unnecessary drawing
+    if (ev.keyCode == 38){
+      g_EyeY += 0.05;
+    }else
+    if (ev.keyCode == 40){
+      g_EyeY -= 0.05;
+    }
+    else{
+      return;
+    }
+    draw(gl, currentAngle, u_ViewMatrix, viewMatrix, ModelMatrix, u_ModelMatrix, normalMatrix, u_NormalMatrix, projMatrix, u_ProjMatrix);    
 }
 

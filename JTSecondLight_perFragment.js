@@ -488,7 +488,9 @@ function initVertexBuffers(gl) { // Create a sphere
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
 
+  console.log("The positions length is: ", positions.length);
   return indices.length;
+
 }
 
 function initArrayBuffer(gl, attribute, data, type, num) {
