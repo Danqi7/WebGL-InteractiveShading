@@ -183,7 +183,7 @@ var FSHADER_SOURCE =
   //
 	//-------------UNIFORMS: values set from JavaScript before a drawing command.
   // first light source: (YOU write a second one...)
-	'uniform LampT u_LampSet[1];\n' +		// Array of all light sources.
+	'uniform LampT u_LampSet[2];\n' +		// Array of all light sources.
 	'uniform MatlT u_MatlSet[1];\n' +		// Array of all materials.
 	//
   'uniform vec3 u_eyePosWorld; \n' + 	// Camera/eye location in world coords.
@@ -202,6 +202,7 @@ var FSHADER_SOURCE =
 //	'  vec3 normal = v_Normal; \n' +
      	// Find the unit-length light dir vector 'L' (surface pt --> light):
 	'  vec3 lightDirection = normalize(u_LampSet[0].pos - v_Position.xyz);\n' +
+	'  vec3 lightDirection1 = normalize(u_LampSet[1].pos - v_Position.xyz);\n' +
 			// Find the unit-length eye-direction vector 'V' (surface pt --> camera)
   '  vec3 eyeDirection = normalize(u_eyePosWorld - v_Position.xyz); \n' +
      	// The dot product of (unit-length) light direction and the normal vector
@@ -209,6 +210,7 @@ var FSHADER_SOURCE =
      	// (look in GLSL manual: what other functions would help?)
      	// gives us the cosine-falloff factor needed for the diffuse lighting term:
 	'  float nDotL = max(dot(lightDirection, normal), 0.0); \n' +
+	'  float nDotL1 = max(dot(lightDirection1, normal), 0.0); \n' +
   	 	// The Blinn-Phong lighting model computes the specular term faster 
   	 	// because it replaces the (V*R)^shiny weighting with (H*N)^shiny,
   	 	// where 'halfway' vector H has a direction half-way between L and V
@@ -216,17 +218,20 @@ var FSHADER_SOURCE =
   	 	// (see http://en.wikipedia.org/wiki/Blinn-Phong_shading_model)
 	'  vec3 H = normalize(lightDirection + eyeDirection); \n' +
 	'  float nDotH = max(dot(H, normal), 0.0); \n' +
+	'  vec3 H1 = normalize(lightDirection1 + eyeDirection); \n' +
+	'  float nDotH1 = max(dot(H1, normal), 0.0); \n' +
 			// (use max() to discard any negatives from lights below the surface)
 			// Apply the 'shininess' exponent K_e:
 			// Try it two different ways:		The 'new hotness': pow() fcn in GLSL.
 			// CAREFUL!  pow() won't accept integer exponents! Convert K_shiny!  
 	'  float e64 = pow(nDotH, float(u_MatlSet[0].shiny));\n' +
+	'  float e641 = pow(nDotH1, float(u_MatlSet[0].shiny));\n' +
  	// Calculate the final color from diffuse reflection and ambient reflection
 //  '	 vec3 emissive = u_Ke;' +
  '	 vec3 emissive = u_MatlSet[0].emit;' +
-  '  vec3 ambient = u_LampSet[0].ambi * u_MatlSet[0].ambi;\n' +
-  '  vec3 diffuse = u_LampSet[0].diff * v_Kd * nDotL;\n' +
-  '	 vec3 speculr = u_LampSet[0].spec * u_MatlSet[0].spec * e64;\n' +
+  '  vec3 ambient = (u_LampSet[0].ambi + u_LampSet[1].ambi) * u_MatlSet[0].ambi;\n' +
+  '  vec3 diffuse = (u_LampSet[0].diff + u_LampSet[1].diff) * v_Kd * nDotL;\n' +
+  '	 vec3 speculr = (u_LampSet[0].spec + u_LampSet[1].spec) * u_MatlSet[0].spec * e64;\n' +
   '  gl_FragColor = vec4(emissive + ambient + diffuse + speculr , 1.0);\n' +
   '}\n';
 //=============================================================================
@@ -267,6 +272,7 @@ var projMatrix = new Matrix4();
 
 //	... for our first light source:   (stays false if never initialized)
 var lamp0 = new LightsT();
+var lamp1 = new LightsT();
 
 
 
@@ -363,6 +369,15 @@ function main() {
     return;
   }
 
+  lamp1.u_pos  = gl.getUniformLocation(gl.program, 'u_LampSet[1].pos');	
+  lamp1.u_ambi = gl.getUniformLocation(gl.program, 'u_LampSet[1].ambi');
+  lamp1.u_diff = gl.getUniformLocation(gl.program, 'u_LampSet[1].diff');
+  lamp1.u_spec = gl.getUniformLocation(gl.program, 'u_LampSet[1].spec');
+  if( !lamp1.u_pos || !lamp1.u_ambi	|| !lamp1.u_diff || !lamp1.u_spec	) {
+    console.log('Failed to get GPUs Lamp1 storage locations');
+    return;
+  }
+
 	// ... for Phong material/reflectance:
 	matl0.uLoc_Ke = gl.getUniformLocation(gl.program, 'u_MatlSet[0].emit');
 	matl0.uLoc_Ka = gl.getUniformLocation(gl.program, 'u_MatlSet[0].ambi');
@@ -390,6 +405,10 @@ function main() {
   // 					function, not main(), so they ALWAYS get updated before each
   //					on-screen re-drawing)
   
+  lamp1.I_pos.elements.set( [5.0, 4.0, 4.0]);
+  lamp1.I_ambi.elements.set([0.4, 0.4, 0.4]);
+  lamp1.I_diff.elements.set([1.0, 1.0, 1.0]);
+  lamp1.I_spec.elements.set([1.0, 1.0, 1.0]);
 
 
 	var tick = function() {
@@ -498,6 +517,12 @@ function draw() {
   gl.uniform3fv(lamp0.u_ambi, lamp0.I_ambi.elements);		// ambient
   gl.uniform3fv(lamp0.u_diff, lamp0.I_diff.elements);		// diffuse
   gl.uniform3fv(lamp0.u_spec, lamp0.I_spec.elements);		// Specular
+
+  gl.uniform3fv(lamp1.u_pos,  lamp1.I_pos.elements.slice(0,3));
+  //		 ('slice(0,3) member func returns elements 0,1,2 (x,y,z) ) 
+  gl.uniform3fv(lamp1.u_ambi, lamp1.I_ambi.elements);		// ambient
+  gl.uniform3fv(lamp1.u_diff, lamp1.I_diff.elements);		// diffuse
+  gl.uniform3fv(lamp1.u_spec, lamp1.I_spec.elements);		// Specular
 //	console.log('lamp0.u_pos',lamp0.u_pos,'\n' );
 //	console.log('lamp0.I_diff.elements', lamp0.I_diff.elements, '\n');
 	matl0.setMatl(matlSel0);// set new material reflectance
@@ -1343,3 +1368,126 @@ function myKeyPress(ev) {
 													', metaKey(Command key or Windows key)='+ev.metaKey);
 	}
 }
+
+var lightStatus = true;
+var lightStatus1 = true;
+
+function ambientAddR()
+{
+	lamp0.I_ambi.elements.set([
+							lamp0.I_ambi.elements[0] + 0.25, 
+							lamp0.I_ambi.elements[1],
+							lamp0.I_ambi.elements[2]]);
+}
+
+function ambientAddG()
+{
+	lamp0.I_ambi.elements.set([
+							lamp0.I_ambi.elements[0], 
+							lamp0.I_ambi.elements[1] + 0.25,
+							lamp0.I_ambi.elements[2]]);
+}
+
+function ambientAddB()
+{
+	lamp0.I_ambi.elements.set([
+							lamp0.I_ambi.elements[0], 
+							lamp0.I_ambi.elements[1],
+							lamp0.I_ambi.elements[2] + 0.25]);
+}
+
+function diffuseAddR()
+{
+	lamp0.I_diff.elements.set([
+							lamp0.I_diff.elements[0] + 0.25, 
+							lamp0.I_diff.elements[1],
+							lamp0.I_diff.elements[2]]);
+}
+
+function diffuseAddG()
+{
+	lamp0.I_diff.elements.set([
+							lamp0.I_diff.elements[0], 
+							lamp0.I_diff.elements[1] + 0.25,
+							lamp0.I_diff.elements[2]]);
+}
+
+function diffuseAddB()
+{
+	lamp0.I_diff.elements.set([
+							lamp0.I_diff.elements[0], 
+							lamp0.I_diff.elements[1],
+							lamp0.I_diff.elements[2] + 0.25]);
+}
+
+function specularAddR()
+{
+	lamp0.I_spec.elements.set([
+							lamp0.I_spec.elements[0] + 0.25, 
+							lamp0.I_spec.elements[1],
+							lamp0.I_spec.elements[2]]);
+}
+
+function specularAddG()
+{
+	lamp0.I_spec.elements.set([
+							lamp0.I_spec.elements[0], 
+							lamp0.I_spec.elements[1] + 0.25,
+							lamp0.I_spec.elements[2]]);
+}
+
+function specularAddB()
+{
+	lamp0.I_spec.elements.set([
+							lamp0.I_spec.elements[0], 
+							lamp0.I_spec.elements[1],
+							lamp0.I_spec.elements[2] + 0.25]);
+}
+
+function lightSwitch()
+{
+	if (lightStatus == true)
+	{
+		lightStatus = false;
+		//lamp0.I_pos.elements.set( [0,0,0]);
+  		lamp0.I_ambi.elements.set([0,0,0]);
+  		lamp0.I_diff.elements.set([0,0,0]);
+  		lamp0.I_spec.elements.set([0,0,0]);
+  		return;
+	}
+	else
+	{
+		lightStatus = true;
+		//lamp0.I_pos.elements.set( [6.0, 5.0, 5.0]);
+  		lamp0.I_ambi.elements.set([0.4, 0.4, 0.4]);
+  		lamp0.I_diff.elements.set([1.0, 1.0, 1.0]);
+  		lamp0.I_spec.elements.set([1.0, 1.0, 1.0]);
+	}
+	
+}
+
+function lightSwitch1()
+{
+	if (lightStatus1 == true)
+	{
+		lightStatus1 = false;
+		//lamp0.I_pos.elements.set( [0,0,0]);
+  		lamp1.I_ambi.elements.set([0,0,0]);
+  		lamp1.I_diff.elements.set([0,0,0]);
+  		lamp1.I_spec.elements.set([0,0,0]);
+  		return;
+	}
+	else
+	{
+		lightStatus1 = true;
+		//lamp0.I_pos.elements.set( [6.0, 5.0, 5.0]);
+  		lamp1.I_ambi.elements.set([0.4, 0.4, 0.4]);
+  		lamp1.I_diff.elements.set([1.0, 1.0, 1.0]);
+  		lamp1.I_spec.elements.set([1.0, 1.0, 1.0]);
+	}
+}
+
+
+
+
+
