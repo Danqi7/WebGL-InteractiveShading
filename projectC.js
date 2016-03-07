@@ -112,12 +112,15 @@ var VSHADER_SOURCE =
   'attribute vec4 a_Position; \n' +		// vertex position (model coord sys)
   'attribute vec4 a_Normal; \n' +			// vertex normal vector (model coord sys)
 
+
 										
 	//-------------UNIFORMS: values set from JavaScript before a drawing command.
 // 	'uniform vec3 u_Kd; \n' +						// Phong diffuse reflectance for the 
  																			// entire shape. Later: as vertex attrib.
 	'uniform MatlT u_MatlSet[1];\n' +		// Array of all materials.
-  'uniform mat4 u_MvpMatrix; \n' +
+  //'uniform mat4 u_MvpMatrix; \n' +
+  'uniform mat4 u_ViewMatrix;\n' +
+  'uniform mat4 u_ProjMatrix;\n' +
   'uniform mat4 u_ModelMatrix; \n' + 		// Model matrix
   'uniform mat4 u_NormalMatrix; \n' +  	// Inverse Transpose of ModelMatrix;
   																			// (won't distort normal vec directions
@@ -133,7 +136,8 @@ var VSHADER_SOURCE =
   'void main() { \n' +
 		// Compute CVV coordinate values from our given vertex. This 'built-in'
 		// 'varying' value gets interpolated to set screen position for each pixel.
-  '  gl_Position = u_MvpMatrix * a_Position;\n' +
+  //'  gl_Position = u_MvpMatrix * a_Position;\n' +
+  '  gl_Position = u_ProjMatrix * u_ViewMatrix * u_ModelMatrix * a_Position;\n' +
 		// Calculate the vertex position & normal vec in the WORLD coordinate system
 		// for use as a 'varying' variable: fragment shaders get per-pixel values
 		// (interpolated between vertices for our drawing primitive (TRIANGLE)).
@@ -219,7 +223,7 @@ var FSHADER_SOURCE =
 	'  float e64 = pow(nDotH, float(u_MatlSet[0].shiny));\n' +
  	// Calculate the final color from diffuse reflection and ambient reflection
 //  '	 vec3 emissive = u_Ke;' +
- '	 vec3 emissive = 										u_MatlSet[0].emit;' +
+ '	 vec3 emissive = u_MatlSet[0].emit;' +
   '  vec3 ambient = u_LampSet[0].ambi * u_MatlSet[0].ambi;\n' +
   '  vec3 diffuse = u_LampSet[0].diff * v_Kd * nDotL;\n' +
   '	 vec3 speculr = u_LampSet[0].spec * u_MatlSet[0].spec * e64;\n' +
@@ -245,7 +249,9 @@ var n_vcount= false;	// formerly 'n', but that name is far too vague and terse
 //		-- For 3D camera and transforms:
 var uLoc_eyePosWorld 	= false;
 var uLoc_ModelMatrix 	= false;
-var uLoc_MvpMatrix 		= false;
+//var uLoc_MvpMatrix 		= false;
+var uLoc_ViewMatrix = false;
+var uLoc_projMatrix = false;
 var uLoc_NormalMatrix = false;
 
 // global vars that contain the values we send thru those uniforms,
@@ -256,17 +262,18 @@ var modelMatrix = new Matrix4();  // Model matrix
 var	mvpMatrix 	= new Matrix4();	// Model-view-projection matrix
 var	normalMatrix= new Matrix4();	// Transformation matrix for normals
 
+var ViewMatrix = new Matrix4();
+var projMatrix = new Matrix4();
+
 //	... for our first light source:   (stays false if never initialized)
 var lamp0 = new LightsT();
 
-	// ... for our first material:
-var matlSel= MATL_RED_PLASTIC;				// see keypress(): 'm' key changes matlSel
-var matl0 = new Material(matlSel);	
+
 
 var floatsPerVertex = 8;
 var ANGLE_STEP = 45.0;
 var currentAngle = 0;
-
+var g_EyeX = 0.0, g_EyeY = 0.25, g_EyeZ = 4.25; 
 
 
 // ---------------END of global vars----------------------------
@@ -335,10 +342,12 @@ function main() {
   // (Version 03: changed these to global vars (DANGER!) for use inside any func)
   uLoc_eyePosWorld  = gl.getUniformLocation(gl.program, 'u_eyePosWorld');
   uLoc_ModelMatrix  = gl.getUniformLocation(gl.program, 'u_ModelMatrix');
-  uLoc_MvpMatrix    = gl.getUniformLocation(gl.program, 'u_MvpMatrix');
+  //uLoc_MvpMatrix    = gl.getUniformLocation(gl.program, 'u_MvpMatrix');
+  uLoc_ViewMatrix   = gl.getUniformLocation(gl.program, 'u_ViewMatrix');
+  uLoc_projMatrix   = gl.getUniformLocation(gl.program, 'u_ProjMatrix');
   uLoc_NormalMatrix = gl.getUniformLocation(gl.program, 'u_NormalMatrix');
   if (!uLoc_eyePosWorld ||
-      !uLoc_ModelMatrix	|| !uLoc_MvpMatrix || !uLoc_NormalMatrix) {
+      !uLoc_ModelMatrix	|| !uLoc_ViewMatrix || !uLoc_NormalMatrix || !uLoc_projMatrix) {
   	console.log('Failed to get GPUs matrix storage locations');
   	return;
   	}
@@ -436,10 +445,53 @@ function animate(angle)
   return newAngle %= 360;
 }
 
+//matlSel1 = (matlSel +1)%MATL_DEFAULT;
+//matlSel2 = (matlSel +1)%MATL_DEFAULT;
+
+//matl0.setMatl(matlSel);// set new material reflectance	
+
+// ... for our first material:
+var matlSel0= MATL_RED_PLASTIC;				// see keypress(): 'm' key changes matlSel
+/*
+var matlSel1 = (matlSel0 +1)%MATL_DEFAULT;
+var matlSel2 = (matlSel0 +2)%MATL_DEFAULT;
+var matlSel3 = (matlSel0 +5)%MATL_DEFAULT;
+*/
+var matl0 = new Material(matlSel0);
+/*
+matl0.setMatl(matlSel0);
+var matl1 = new Material(matlSel1);
+matl1.setMatl(matlSel1);
+var matl2 = new Material(matlSel2);
+matl2.setMatl(matlSel2);
+var matl3 = new Material(matlSel3);
+matl3.setMatl(matlSel3);
+*/
 function draw() {
 //-------------------------------------------------------------------------------
-  // Send fresh 'uniform' values to the GPU:
+	// Clear color and depth buffer
+  	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+	gl.viewport(0,                              // Viewport lower-left corner
+                0,                              // (x,y) location(in pixels)
+              //gl.drawingBufferWidth/2,
+              canvas.width,        // viewport width, height.
+              //gl.drawingBufferHeight/2
+              canvas.height);
+  // Set the matrix to be used for to set the camera view
+  ViewMatrix.setLookAt(g_EyeX, g_EyeY, g_EyeZ,  // eye position
+                        0, 0, 0,                // look-at point (origin)
+                        0, 1, 0);               // up vector (+y)
 
+  gl.uniformMatrix4fv(uLoc_ViewMatrix, false, ViewMatrix.elements);
+  // Calculate the view projection matrix
+  projMatrix.setPerspective(30, canvas.width/canvas.height, 1, 100);
+  //projMatrix.lookAt(eyePosWorld[0], eyePosWorld[1], eyePosWorld[2], // eye pos
+  	//								0,  0, 0, 				// aim-point (in world coords)
+	//								  0,  0, 1);				// up (in world coords)
+  gl.uniformMatrix4fv(uLoc_projMatrix, false, projMatrix.elements);
+
+
+  // Send fresh 'uniform' values to the GPU:
 	//---------------For the light source(s):
   gl.uniform3fv(lamp0.u_pos,  lamp0.I_pos.elements.slice(0,3));
   //		 ('slice(0,3) member func returns elements 0,1,2 (x,y,z) ) 
@@ -448,7 +500,7 @@ function draw() {
   gl.uniform3fv(lamp0.u_spec, lamp0.I_spec.elements);		// Specular
 //	console.log('lamp0.u_pos',lamp0.u_pos,'\n' );
 //	console.log('lamp0.I_diff.elements', lamp0.I_diff.elements, '\n');
-
+	matl0.setMatl(matlSel0);// set new material reflectance
 	//---------------For the Material object(s):
 	gl.uniform3fv(matl0.uLoc_Ke, matl0.K_emit.slice(0,3));				// Ke emissive
 	gl.uniform3fv(matl0.uLoc_Ka, matl0.K_ambi.slice(0,3));				// Ka ambient
@@ -460,69 +512,237 @@ function draw() {
 //	console.log('matl0.K_emit', matl0.K_emit.slice(0,3), '\n');
 //	console.log('matl0.uLoc_Ke', matl0.uLoc_Ke, '\n'); //
 
-	gl.viewport(0,                              // Viewport lower-left corner
-                0,                              // (x,y) location(in pixels)
-              //gl.drawingBufferWidth/2,
-              canvas.width,        // viewport width, height.
-              //gl.drawingBufferHeight/2
-              canvas.height);
 
+
+  modelMatrix.setIdentity();
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
   pushMatrix(modelMatrix);
-  pushMatrix(mvpMatrix);
+
+  //==========arm base===========
+  	
   //----------------For the Matrices: find the model matrix:
-  modelMatrix.setTranslate(1,2,-1.0);
-  modelMatrix.rotate(25,0,1,0);
-  modelMatrix.scale(0.5,0.5,0.5);
-  // Calculate the view projection matrix
-  mvpMatrix.setPerspective(30, canvas.width/canvas.height, 1, 100);
-  mvpMatrix.lookAt(	eyePosWorld[0], eyePosWorld[1], eyePosWorld[2], // eye pos
-  									0,  0, 0, 				// aim-point (in world coords)
-									  0,  0, 1);				// up (in world coords)
-  mvpMatrix.multiply(modelMatrix);
-  // Calculate the matrix to transform the normal based on the model matrix
+  modelMatrix.setTranslate(-0.5,-0.45,1.0);
+  modelMatrix.rotate(currentAngle+25,0,1,0);
+  modelMatrix.scale(0.3,0.3,0.3);
   normalMatrix.setInverseOf(modelMatrix);
   normalMatrix.transpose();
 
   // Send the new matrix values to their locations in the GPU:
-  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
-  gl.uniformMatrix4fv(uLoc_MvpMatrix, false, mvpMatrix.elements);
   gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+  
 
-  // Clear color and depth buffer
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-
-  // Draw the cube
   //gl.drawElements(gl.TRIANGLES, n_vcount, gl.UNSIGNED_SHORT, 0);
   gl.drawArrays(gl.TRIANGLES,
   				armStart/floatsPerVertex,
   				armVerts.length/floatsPerVertex);
+  //=====second armbase=======
+  modelMatrix.rotate(currentAngle*0.13, 0,0,1);
+  modelMatrix.translate(0.0,0.85,0.0);
+  modelMatrix.scale(0.7,0.7,0.7);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();
 
-  /*mvpMatrix = popMatrix();
-  modelMatrix = popMatrix();
-  pushMatrix(modelMatrix);
-  pushMatrix(mvpMatrix);*/
-  //modelMatrix.setIdentity();
-  //mvpMatrix.setIdentity();
-  //mvpMatrix.multiply(modelMatrix);
-  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
-  //gl.uniformMatrix4fv(uLoc_MvpMatrix, false, mvpMatrix.elements);
-  
-  //mvpMatrix.rotate(90.0, 1,0,0);
-  mvpMatrix.rotate(-90,0,1,0);
-
-  mvpMatrix.translate(0.0, 0.0, -0.6);
-  mvpMatrix.scale(0.4, 0.4,0.4);
-  
-  gl.uniformMatrix4fv(uLoc_MvpMatrix, false, mvpMatrix.elements);
   gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+  
+  gl.drawArrays(gl.TRIANGLES,
+  				armStart/floatsPerVertex,
+  				armVerts.length/floatsPerVertex);
 
-  gl.drawArrays(gl.LINES,
-  				gndStart/floatsPerVertex,
-  				gndVerts.length/floatsPerVertex);  
+  pushMatrix(modelMatrix);
 
-  //mvpMatrix = popMatrix();
-  //modelMatrix = popMatrix();
+  //=====upper1========
+  modelMatrix.rotate(25,1,0,0);
+  modelMatrix.translate(0.08,0.0,0.5);
+  modelMatrix.scale(0.4,0.4,0.4);
+  modelMatrix.rotate(currentAngle*0.3, 1,0,0);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();
 
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+  
+  gl.drawArrays(gl.TRIANGLES,
+  				armStart/floatsPerVertex,
+  				armVerts.length/floatsPerVertex);
+
+  modelMatrix.translate(0.0,0.8,0.25);
+  modelMatrix.scale(0.7,0.7,0.7);
+  modelMatrix.rotate(45,1,0,0);
+  modelMatrix.rotate(currentAngle*0.45, 0,1,0);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+  
+  gl.drawArrays(gl.TRIANGLES,
+  				armStart/floatsPerVertex,
+  				armVerts.length/floatsPerVertex);
+  //====upper2=========
+  modelMatrix = popMatrix();
+
+  modelMatrix.rotate(-25,1,0,0);
+  modelMatrix.translate(0.08,0.0,-0.5);
+  modelMatrix.scale(0.4,0.4,0.4);
+  modelMatrix.rotate(-currentAngle*0.3, 1,0,0);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+  
+  gl.drawArrays(gl.TRIANGLES,
+  				armStart/floatsPerVertex,
+  				armVerts.length/floatsPerVertex);
+
+  modelMatrix.translate(0.0,0.8,-0.25);
+  modelMatrix.scale(0.7,0.7,0.7);
+  modelMatrix.rotate(-45,1,0,0);
+  modelMatrix.rotate(currentAngle*0.45, 0,1,0);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+  
+  gl.drawArrays(gl.TRIANGLES,
+  				armStart/floatsPerVertex,
+  				armVerts.length/floatsPerVertex);
+
+
+  //========sphere===========
+
+     matl0.setMatl(matlSel0+1);
+    //---------------For the Material object(s):
+	gl.uniform3fv(matl0.uLoc_Ke, matl0.K_emit.slice(0,3));				// Ke emissive
+	gl.uniform3fv(matl0.uLoc_Ka, matl0.K_ambi.slice(0,3));				// Ka ambient
+  	gl.uniform3fv(matl0.uLoc_Kd, matl0.K_diff.slice(0,3));				// Kd	diffuse
+	gl.uniform3fv(matl0.uLoc_Ks, matl0.K_spec.slice(0,3));				// Ks specular
+	gl.uniform1i(matl0.uLoc_Kshiny, parseInt(matl0.K_shiny, 10));     // Kshiny 
+
+  modelMatrix.setIdentity();
+  normalMatrix.setIdentity();
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();	
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  modelMatrix.scale(0.8,0.8,-0.8);              // convert to left-handed coord sys
+                                          // to match WebGL display canvas.
+  modelMatrix.scale(0.3,0.3,0.3);
+  modelMatrix.translate(1,0,-5);
+  modelMatrix.rotate(currentAngle,0,1,0);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();	
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP,
+                sphStart/floatsPerVertex,
+                sphVerts.length/floatsPerVertex);
+
+  modelMatrix.scale(0.3,0.3,0.3);
+  modelMatrix.translate(1,0,-5);
+  modelMatrix.rotate(currentAngle,0,1,0);
+  modelMatrix.rotate(currentAngle,1,1,0);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();	
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP,
+                sphStart/floatsPerVertex,
+                sphVerts.length/floatsPerVertex);
+
+  modelMatrix.scale(0.5,0.5,0.5);
+  modelMatrix.translate(1,0,-5);
+  modelMatrix.rotate(currentAngle,0,1,0);
+  modelMatrix.rotate(currentAngle,1,0,1);
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();	
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  gl.drawArrays(gl.TRIANGLE_STRIP,
+                sphStart/floatsPerVertex,
+                sphVerts.length/floatsPerVertex);
+
+  //==========tetrahedron=========
+
+       matl0.setMatl(matlSel0+5);
+    //---------------For the Material object(s):
+	gl.uniform3fv(matl0.uLoc_Ke, matl0.K_emit.slice(0,3));				// Ke emissive
+	gl.uniform3fv(matl0.uLoc_Ka, matl0.K_ambi.slice(0,3));				// Ka ambient
+  	gl.uniform3fv(matl0.uLoc_Kd, matl0.K_diff.slice(0,3));				// Kd	diffuse
+	gl.uniform3fv(matl0.uLoc_Ks, matl0.K_spec.slice(0,3));				// Ks specular
+	gl.uniform1i(matl0.uLoc_Kshiny, parseInt(matl0.K_shiny, 10));     // Kshiny 
+
+  modelMatrix.setIdentity();
+
+  normalMatrix.setIdentity();
+  normalMatrix.setInverseOf(modelMatrix);
+  normalMatrix.transpose();	
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  modelMatrix.scale(0.2,0.2,0.2);
+  modelMatrix.rotate(-90, 1,0,0);
+  modelMatrix.rotate(currentAngle*0.3,0,0,1);
+  modelMatrix.translate(6,-6,-2);
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  gl.drawArrays(gl.TRIANGLES,
+                tetraStart/floatsPerVertex,
+                tetraVerts.length/floatsPerVertex);
+
+ // modelMatrix.scale(0.2,0.2,0.2);
+  //modelMatrix.rotate(-90, 1,0,0);
+  //modelMatrix.rotate(currentAngle,0,0,1);
+  modelMatrix.translate(0,0,1.3);
+  modelMatrix.rotate(currentAngle,0,0,1);
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  gl.drawArrays(gl.TRIANGLES,
+                tetraStart/floatsPerVertex,
+                tetraVerts.length/floatsPerVertex);
+
+  modelMatrix.translate(0,0,1.3);
+  modelMatrix.rotate(currentAngle,0,0,1);
+  modelMatrix.rotate(currentAngle*0.5,0,1,0);
+
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  gl.drawArrays(gl.TRIANGLES,
+                tetraStart/floatsPerVertex,
+                tetraVerts.length/floatsPerVertex);
+
+
+  
+  //======grid===========
+
+  modelMatrix.setIdentity();
+  gl.uniformMatrix4fv(uLoc_NormalMatrix, false, normalMatrix.elements);
+  gl.uniformMatrix4fv(uLoc_ModelMatrix, false, modelMatrix.elements);
+
+  ViewMatrix.rotate(-90,1,0,0);
+  ViewMatrix.translate(0.0,0.0,-0.6);
+  ViewMatrix.scale(0.4, 0.4, 0.4);
+
+  gl.uniformMatrix4fv(uLoc_ViewMatrix, false, ViewMatrix.elements);
+
+  gl.drawArrays(gl.LINES,             // use this drawing primitive, and
+                  gndStart/floatsPerVertex, // start at this vertex number, and
+                  gndVerts.length/floatsPerVertex);   // draw this many vertices
 
 }
 
@@ -586,6 +806,82 @@ function makeGroundGrid() {
     gndVerts[j+5] = 0;
     gndVerts[j+6] = 1;
     gndVerts[j+7] = 0;
+  }
+}
+
+function makeSphere() {
+//==============================================================================
+// Make a sphere from one OpenGL TRIANGLE_STRIP primitive.   Make ring-like 
+// equal-lattitude 'slices' of the sphere (bounded by planes of constant z), 
+// and connect them as a 'stepped spiral' design (see makeCylinder) to build the
+// sphere from one triangle strip.
+  var slices = 13;    // # of slices of the sphere along the z axis. >=3 req'd
+                      // (choose odd # or prime# to avoid accidental symmetry)
+  var sliceVerts  = 27; // # of vertices around the top edge of the slice
+                      // (same number of vertices on bottom of slice, too)
+  var sliceAngle = Math.PI/slices;  // lattitude angle spanned by one slice.
+
+  // Create a (global) array to hold this sphere's vertices:
+  sphVerts = new Float32Array(  ((slices * 2* sliceVerts) -2) * floatsPerVertex);
+                    // # of vertices * # of elements needed to store them. 
+                    // each slice requires 2*sliceVerts vertices except 1st and
+                    // last ones, which require only 2*sliceVerts-1.
+                    
+  // Create dome-shaped top slice of sphere at z=+1
+  // s counts slices; v counts vertices; 
+  // j counts array elements (vertices * elements per vertex)
+  var cos0 = 0.0;         // sines,cosines of slice's top, bottom edge.
+  var sin0 = 0.0;
+  var cos1 = 0.0;
+  var sin1 = 0.0; 
+  var j = 0;              // initialize our array index
+  var isLast = 0;
+  var isFirst = 1;
+  for(s=0; s<slices; s++) { // for each slice of the sphere,
+    // find sines & cosines for top and bottom of this slice
+    if(s==0) {
+      isFirst = 1;  // skip 1st vertex of 1st slice.
+      cos0 = 1.0;   // initialize: start at north pole.
+      sin0 = 0.0;
+    }
+    else {          // otherwise, new top edge == old bottom edge
+      isFirst = 0;  
+      cos0 = cos1;
+      sin0 = sin1;
+    }               // & compute sine,cosine for new bottom edge.
+    cos1 = Math.cos((s+1)*sliceAngle);
+    sin1 = Math.sin((s+1)*sliceAngle);
+    // go around the entire slice, generating TRIANGLE_STRIP verts
+    // (Note we don't initialize j; grows with each new attrib,vertex, and slice)
+    if(s==slices-1) isLast=1; // skip last vertex of last slice.
+    for(v=isFirst; v< 2*sliceVerts-isLast; v++, j+=floatsPerVertex) { 
+      if(v%2==0)
+      {       // put even# vertices at the the slice's top edge
+              // (why PI and not 2*PI? because 0 <= v < 2*sliceVerts
+              // and thus we can simplify cos(2*PI(v/2*sliceVerts))  
+        sphVerts[j  ] = sin0 * Math.cos(Math.PI*(v)/sliceVerts);  
+        sphVerts[j+1] = sin0 * Math.sin(Math.PI*(v)/sliceVerts);  
+        sphVerts[j+2] = cos0;   
+        sphVerts[j+3] = 1.0;
+        sphVerts[j+4] = sin1 * Math.cos(Math.PI*(v-1)/sliceVerts);
+        sphVerts[j+5] = sin1 * Math.sin(Math.PI*(v-1)/sliceVerts);
+        sphVerts[j+6] = cos1;
+        sphVerts[j+7] = 0.0;            
+      }
+      else {  // put odd# vertices around the slice's lower edge;
+              // x,y,z,w == cos(theta),sin(theta), 1.0, 1.0
+              //          theta = 2*PI*((v-1)/2)/capVerts = PI*(v-1)/capVerts
+        sphVerts[j  ] = sin1 * Math.cos(Math.PI*(v-1)/sliceVerts);    // x
+        sphVerts[j+1] = sin1 * Math.sin(Math.PI*(v-1)/sliceVerts);    // y
+        sphVerts[j+2] = cos1;                                       // z
+        sphVerts[j+3] = 1.0;
+        sphVerts[j+4] = sin1 * Math.cos(Math.PI*(v-1)/sliceVerts);
+        sphVerts[j+5] = sin1 * Math.sin(Math.PI*(v-1)/sliceVerts);
+        sphVerts[j+6] = cos1;
+        sphVerts[j+7] = 0.0;                                     
+      }
+     
+    }
   }
 }
 
@@ -667,6 +963,30 @@ console.log("what the heck: ", armVerts.length);
 
 }
 
+function makeTetrahedron()
+{
+	var c30 = Math.sqrt(0.75);					// == cos(30deg) == sqrt(3) / 2
+	var sq2	= Math.sqrt(2.0);				
+tetraVerts = new Float32Array([
+	 // Face 0: (left side)  
+     0.0,  0.0, sq2, 1.0,              -1.5*sq2, -c30*sq2, -c30, 0.0, // Node 0 (apex, +z axis;  blue) 
+     c30, -0.5, 0.0, 1.0,             -1.5*sq2, -c30*sq2, -c30, 0.0, // Node 1 (base: lower rt; red)
+     0.0,  1.0, 0.0, 1.0,             -1.5*sq2, -c30*sq2, -c30, 0.0, // Node 2 (base: +y axis;  grn)
+      // Face 1: (right side)
+     0.0,  0.0, sq2, 1.0,             1.5*sq2, -c30*sq2, -c30, 0.0, // Node 0 (apex, +z axis;  blue)
+     0.0,  1.0, 0.0, 1.0,             1.5*sq2, -c30*sq2, -c30, 0.0, // Node 2 (base: +y axis;  grn)
+    -c30, -0.5, 0.0, 1.0,            1.5*sq2, -c30*sq2, -c30, 0.0, // Node 3 (base:lower lft; white)
+      // Face 2: (lower side)
+     0.0,  0.0, sq2, 1.0,             0, 2*c30*sq2, -c30, 0.0, // Node 0 (apex, +z axis;  blue) 
+    -c30, -0.5, 0.0, 1.0,             0, 2*c30*sq2, -c30, 0.0, // Node 3 (base:lower lft; white)
+     c30, -0.5, 0.0, 1.0,           0, 2*c30*sq2, -c30, 0.0, // Node 1 (base: lower rt; red) 
+      // Face 3: (base side)  
+    -c30, -0.5, 0.0, 1.0,             0,0,3*c30,0.0, // Node 3 (base:lower lft; white)
+     0.0,  1.0, 0.0, 1.0,              0,0,3*c30,0.0,   // Node 2 (base: +y axis;  grn)
+     c30, -0.5, 0.0, 1.0,             0,0,3*c30,0.0,   // Node 1 (base: lower rt; red)
+])
+}
+
 function initVertexBuffers(gl) {
 //==============================================================================
   
@@ -674,11 +994,13 @@ function initVertexBuffers(gl) {
   // (recall the 'basic shapes' starter code...)
   makeGroundGrid();
   makeRoboticarm();
+  makeSphere();
+  makeTetrahedron();
   
 
   // How much space to store all the shapes in one array?
   // (no 'var' means this is a global variable)
-  mySiz = gndVerts.length + armVerts.length;
+  mySiz = gndVerts.length + armVerts.length + sphVerts.length + tetraVerts.length;
 
   //console.log("forestVerts numeber is ", forestVerts.length);
    console.log("gndVerts numeber is ", gndVerts.length);
@@ -699,6 +1021,16 @@ function initVertexBuffers(gl) {
   for (j=0; j < armVerts.length; i++,j++)
   {
     verticesColors[i] = armVerts[j];
+  }
+  sphStart = i;
+  for (j=0; j < sphVerts.length; i++,j++)
+  {
+    verticesColors[i] = sphVerts[j];
+  }
+  tetraStart = i;
+  for (j=0; j < tetraVerts.length; i++,j++)
+  {
+    verticesColors[i] = tetraVerts[j];
   }
 
   // Create a vertex buffer object (VBO)
@@ -929,22 +1261,38 @@ function myKeyDown(ev) {
 			// and print on webpage in the <div> element with id='Result':
   		document.getElementById('Result').innerHTML =
   			' Left Arrow:keyCode='+ev.keyCode;
+  			g_EyeX -= 0.05;
+			draw();
 			break;
 		case 38:		// up-arrow key
 			console.log('   up-arrow.');
   		document.getElementById('Result').innerHTML =
   			'   Up Arrow:keyCode='+ev.keyCode;
+  			g_EyeY += 0.05;
+			draw();
 			break;
 		case 39:		// right-arrow key
 			console.log('right-arrow.');
   		document.getElementById('Result').innerHTML =
   			'Right Arrow:keyCode='+ev.keyCode;
-  		break;
+  			g_EyeX += 0.05;
+			draw();
+  			break;
 		case 40:		// down-arrow key
 			console.log(' down-arrow.');
   		document.getElementById('Result').innerHTML =
   			' Down Arrow:keyCode='+ev.keyCode;
-  		break;
+  			g_EyeY -= 0.05;
+			draw();
+  			break;
+  		case 90:
+  			g_EyeZ -= 0.05;
+  			draw();
+  			break;
+  		case 88:
+  			g_EyeZ += 0.05;
+  			draw();
+  			break;
 		default:
 			console.log('myKeyDown()--keycode=', ev.keyCode, ', charCode=', ev.charCode);
   		document.getElementById('Result').innerHTML =
@@ -960,20 +1308,22 @@ function myKeyUp(ev) {
 	console.log('myKeyUp()--keyCode='+ev.keyCode+' released.');
 }
 
+
+
 function myKeyPress(ev) {
 //===============================================================================
 // Best for capturing alphanumeric keys and key-combinations such as 
 // CTRL-C, alt-F, SHIFT-4, etc.
 	switch(ev.keyCode)
 	{
-		case 77:	// UPPER-case 'M' key:
-		case 109:	// LOWER-case 'm' key:
-			matlSel = (matlSel +1)%MATL_DEFAULT;		// see materials_Ayerdi.js for list
-			console.log('MatlSel=', matlSel, '\n');
+		//case 77:	// UPPER-case 'M' key:
+		//case 109:	// LOWER-case 'm' key:
+		//	matlSel = (matlSel +1)%MATL_DEFAULT;		// see materials_Ayerdi.js for list
+	//		console.log('MatlSel=', matlSel, '\n');
 //console.log('matl0.K_emit', matl0.K_emit, '\n');
-			matl0.setMatl(matlSel);									// set new material reflectances
-			draw();																	// re-draw on-screen image.
-			break;
+	//		matl0.setMatl(matlSel);									// set new material reflectances
+	//		draw();																	// re-draw on-screen image.
+	//		break;
 		case 83: // UPPER-case 's' key:
 			matl0.K_shiny += 1.0;								// INCREASE shinyness, but with a
 			if(matl0.K_shiny > 128.0) matl0.K_shiny = 128.0;	// upper limit.
@@ -991,34 +1341,5 @@ function myKeyPress(ev) {
 													', shift='    +ev.shiftKey + ', ctrl='    +ev.ctrlKey +
 													', altKey='   +ev.altKey   +
 													', metaKey(Command key or Windows key)='+ev.metaKey);
-		break;
 	}
 }
-
-var g_EyeX = 0.0, g_EyeY = 0.25, g_EyeZ = 4.25; 
-
-
-function MoveLeft() {
-//------------------------------------------------------
-//HTML calls this'Event handler' or 'callback function' when we press a key:
-
-    if(ev.keyCode == 39) { // The right arrow key was pressed
-//      g_EyeX += 0.01;
-        g_EyeX += 0.05;    // INCREASED for perspective camera)
-    } else 
-    if (ev.keyCode == 37) { // The left arrow key was pressed
-//      g_EyeX -= 0.01;
-        g_EyeX -= 0.05;    // INCREASED for perspective camera)
-    } // Prevent the unnecessary drawing
-    if (ev.keyCode == 38){
-      g_EyeY += 0.05;
-    }else
-    if (ev.keyCode == 40){
-      g_EyeY -= 0.05;
-    }
-    else{
-      return;
-    }
-    draw(gl, currentAngle, u_ViewMatrix, viewMatrix, ModelMatrix, u_ModelMatrix, normalMatrix, u_NormalMatrix, projMatrix, u_ProjMatrix);    
-}
-
