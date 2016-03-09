@@ -277,12 +277,6 @@ function main() {
     return;
   }
 
-  // Initialize shaders
-  if (!initShaders(gl, VSHADER_SOURCE, FSHADER_SOURCE)) {
-    console.log('Failed to intialize shaders.');
-    return;
-  }
-
   // 
   n_vcount = initVertexBuffers(gl);		// vertex count.
   if (n_vcount < 0) {

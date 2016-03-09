@@ -1,242 +1,418 @@
-//23456789_123456789_123456789_123456789_123456789_123456789_123456789_123456789_
-//
-// PointLightedSphere_perFragment.js (c) 2012 matsuda and kanda
-// MODIFIED for EECS 351-1, Northwestern Univ. Jack Tumblin:
-//
-//		Completed the Blinn-Phong lighting model: add emissive and specular:
-//		--Ke, Ka, Kd, Ks: K==Reflectance; emissive, ambient, diffuse, specular.
-//		--Kshiny: specular exponent for 'shinyness'.
-//		--Ia, Id, Is:		I==Illumination:          ambient, diffuse, specular.
-//		-- Implemented Blinn-Phong 'half-angle' specular term (from class)
-//
-//	JTSecondLight_perFragment.js:
-//  Version 01: Same as JTPointBlinnPhongSphere_perFragment.js
-//	Version 02: add mouse, keyboard callbacks with on-screen display.
-//	Version 03: add 'draw()' function (ugly!) to call whenever we need to 
-//							re-draw the screen (e.g. after mouse-drag). Convert all 'handles'
-//							for GPU storage locations (supplied by gl.getUniformLocation() 
-//							to GLOBAL vars to prevent large argument lists for the draw() 
-//							fcn.  Apply K_shiny uniform in GLSL using pow() fcn; test it
-//							with K_shiny values of 10 and 100.
-//	Version 04: eliminate arguments to 'draw()' function by converting them to
-//							'global' variables; then we can call 'draw()' from any fcn.  
-//							In keypress() fcn, make s/S keys decrease/increase K_shiny by 1
-//							and call the 'draw()' function to show result on-screen. 
-//							Add JavaScript global variables for existing lamp0 uniforms;
-//							(Temporarily) use mouse-drag to modify lamp0 position & redraw;
-//							and make 'clear' button re-set the lamp0 position.
-//							Note how AWKWARDLY mouse-dragging moved the light: can we fix it?
-//	Version 05: YES! first, lets' understand what we see on-screen:
-//						--Prev. versions set Camera position to (6,0,0) in world coords,  
-//							(eyeWorldPos[] value set in main()), aimed at origin, 'up'==+z.
-//							THUS camera's x,y axes are aligned with world-space y,z axes! 
-//						--Prev. versions set lamp0Pos[] to world coords (6,6,0) in main(),
-//							thus it's on-screen location is center-right.  Our mouseDrag() 
-//							code causes left/right drag to adjust lamp0 +/-x in world space, 
-//							(towards/away from camera), and up/down drag adjusts lamp0 +/-y 
-//							(left/right on-screen). No wonder the result looks weird!
-//							FIX IT: change mouseDrag() to map x,y drags to lamp0 y,z values
-//								instead of x,y.  We will keep x value fixed at +6, so that
-//								mouse-drags move lamp0 in the same yz plane as the camera.
-//								ALSO -- change lamp0 position to better-looking (6,5,5). 
-//								(don't forget HTML button handler 'clearDrag()' fcn below).
-//	Version 06: Create GLSL struct 'LampT' & prove we can use it as a uniform
-//							that affects Vertex Shader's on-screen result (see version0 6a)
-//							In Fragment shader, create a 1-element array of 'LampT' structs 
-//							and use it to replace the uniforms for 'lamp0' (see version 06b)
-//	Version 07:	In JavaScript, use the 'materials_Ayerdi.js' library to replace //							the individual 'matl0_K...' global vars with a new 'materials' 
-//							object made of MATL_RED_PLASTIC called 'matl0' (ver. 07a).
-//							Update keypress() so that the 'm' key will change material of
-//							the sphere; move the uniform-setting for lights and materials
-//							out of main() and into the 'draw()' function: (ver. 07b)
-//	Version 08:	In JavaScript, create a 'lightsT' object to hold all data 
-//							needed or used by one light source of any kind; put all its
-//							functions in a separate 'lights-JT.js' library (see HTML file:
-//							load this 'library' along with cuon-matrix-quat.js, etc).
-//							Create just one lightsT object called 'lamp0' to test.
-//	Version 09: Create GLSL struct 'MatlT'; test it. Create a 1-element array of 
-//							'MatlT' structs in the Fragment Shader and  use element 0 of 
-//							that array to replace our misc reflectance uniforms.
-//
-// SOLUTION TO Wed March 2 in-Class Challenge:
-//	Version 10: In Javascript, improve 'Materials_Ayerdi.js': add a set() member
-//							function to choose new materials without discarding the object 
-//							(as we did for the 'm' key in keypress()).  Then add new member
-//							variables to hold uniform's GPU locations (as in LightsT);
-//							to eliminate the last materials global vars. (Ver 10b)
-//
-
-//  Fri Feb 26 2016 in-class activity:
-//	Version 06: Step 1 to remove Global variables by object-oriented design;
-//							LET US TRY IT!   Organize collections of objects: 
-//							--Best way to create a JavaScript 'Lamp' object?
-//							--Best way to transfer contents to GLSL? GLSL 'Lamp' struct?
-// (try: https://www.opengl.org/wiki/Uniform_%28GLSL%29 
-//							--find 'struct Thingy', note how uniforms set struct contents
-//								in sequential locations, and/or fill them as arrays...
-// (try: http://wiki.lwjgl.org/wiki/GLSL_Tutorial:_Communicating_with_Shaders)
-//
-//	STILL TO DO:
-//							--add direction/spotlight mode (Lengyel, Section 7.2.4 pg. 160)
-//							by adding a 'look-at' point member.
-//							--add a user-interface to aim the spotlight ('glass cylinder'?) 
-//							--add a new light that recreates the Version 01 light at (6,6,0).
-//							--add user-interface to (fixed) light at (6,6,0).  How shall we 
-//							organize MULTIPLE lights (up to 8?) by object-oriented methods?
-
-//			--Further object-oriented re-organizing: can we make objects for 
-//				User-Interface? Shapes? Cameras? Textures? Animation? can we fit them 
-//				all inside just a 'Scene' object, and use that as our program's
-//				one-and-only global variable?
-
-//=============================================================================
-// Vertex shader program
-//=============================================================================
 var VSHADER_SOURCE =
-	//-------------Set precision.
-	// GLSL-ES 2.0 defaults (from spec; '4.5.3 Default Precision Qualifiers'):
-	// DEFAULT for Vertex Shaders: 	precision highp float; precision highp int;
-	//									precision lowp sampler2D; precision lowp samplerCube;
-	// DEFAULT for Fragment Shaders:  UNDEFINED for float; precision mediump int;
-	//									precision lowp sampler2D;	precision lowp samplerCube;
-	//--------------- GLSL Struct Definitions:
-	'struct MatlT {\n' +		// Describes one Phong material by its reflectances:
-	'		vec3 emit;\n' +			// Ke: emissive -- surface 'glow' amount (r,g,b);
-	'		vec3 ambi;\n' +			// Ka: ambient reflectance (r,g,b)
-	'		vec3 diff;\n' +			// Kd: diffuse reflectance (r,g,b)
-	'		vec3 spec;\n' + 		// Ks: specular reflectance (r,g,b)
-	'		int shiny;\n' +			// Kshiny: specular exponent (integer >= 1; typ. <200)
-  '		};\n' +
-  //																
-	//-------------ATTRIBUTES of each vertex, read from our Vertex Buffer Object
-  'attribute vec4 a_Position; \n' +		// vertex position (model coord sys)
-  'attribute vec4 a_Normal; \n' +			// vertex normal vector (model coord sys)
-
-
-										
-	//-------------UNIFORMS: values set from JavaScript before a drawing command.
-// 	'uniform vec3 u_Kd; \n' +						// Phong diffuse reflectance for the 
- 																			// entire shape. Later: as vertex attrib.
-	'uniform MatlT u_MatlSet[1];\n' +		// Array of all materials.
-  //'uniform mat4 u_MvpMatrix; \n' +
-  'uniform mat4 u_ViewMatrix;\n' +
-  'uniform mat4 u_ProjMatrix;\n' +
-  'uniform mat4 u_ModelMatrix; \n' + 		// Model matrix
-  'uniform mat4 u_NormalMatrix; \n' +  	// Inverse Transpose of ModelMatrix;
-  																			// (won't distort normal vec directions
-  																			// but it usually WILL change its length)
   
-	//-------------VARYING:Vertex Shader values sent per-pixel to Fragment shader:
-	'varying vec3 v_Kd; \n' +							// Phong Lighting: diffuse reflectance
-																				// (I didn't make per-pixel Ke,Ka,Ks;
-																				// we use 'uniform' values instead)
-  'varying vec4 v_Position; \n' +				
-  'varying vec3 v_Normal; \n' +					// Why Vec3? its not a point, hence w==0
-	//-----------------------------------------------------------------------------
-  'void main() { \n' +
-		// Compute CVV coordinate values from our given vertex. This 'built-in'
-		// 'varying' value gets interpolated to set screen position for each pixel.
-  //'  gl_Position = u_MvpMatrix * a_Position;\n' +
-  '  gl_Position = u_ProjMatrix * u_ViewMatrix * u_ModelMatrix * a_Position;\n' +
-		// Calculate the vertex position & normal vec in the WORLD coordinate system
-		// for use as a 'varying' variable: fragment shaders get per-pixel values
-		// (interpolated between vertices for our drawing primitive (TRIANGLE)).
-  '  v_Position = u_ModelMatrix * a_Position; \n' +
-		// 3D surface normal of our vertex, in world coords.  ('varying'--its value
-		// gets interpolated (in world coords) for each pixel's fragment shader.
-  '  v_Normal = normalize(vec3(u_NormalMatrix * a_Normal));\n' +
-	'	 v_Kd = u_MatlSet[0].diff; \n' +		// find per-pixel diffuse reflectance from per-vertex
-													// (no per-pixel Ke,Ka, or Ks, but you can do it...)
-//	'  v_Kd = vec3(1.0, 1.0, 0.0); \n'	+ // TEST; color fixed at green
-  '}\n';
-
-//=============================================================================
-// Fragment shader program
-//=============================================================================
-var FSHADER_SOURCE =
-	//-------------Set precision.
-	// GLSL-ES 2.0 defaults (from spec; '4.5.3 Default Precision Qualifiers'):
-	// DEFAULT for Vertex Shaders: 	precision highp float; precision highp int;
-	//									precision lowp sampler2D; precision lowp samplerCube;
-	// DEFAULT for Fragment Shaders:  UNDEFINED for float; precision mediump int;
-	//									precision lowp sampler2D;	precision lowp samplerCube;
-	// MATCH the Vertex shader precision for float and int:
   'precision highp float;\n' +
   'precision highp int;\n' +
-  //
-	//--------------- GLSL Struct Definitions:
-	'struct LampT {\n' +		// Describes one point-like Phong light source
-	'		vec3 pos;\n' +			// (x,y,z,w); w==1.0 for local light at x,y,z position
-													//		   w==0.0 for distant light from x,y,z direction 
-	' 	vec3 ambi;\n' +			// Ia ==  ambient light source strength (r,g,b)
-	' 	vec3 diff;\n' +			// Id ==  diffuse light source strength (r,g,b)
-	'		vec3 spec;\n' +			// Is == specular light source strength (r,g,b)
-	'}; \n' +
-	//
-	'struct MatlT {\n' +		// Describes one Phong material by its reflectances:
-	'		vec3 emit;\n' +			// Ke: emissive -- surface 'glow' amount (r,g,b);
-	'		vec3 ambi;\n' +			// Ka: ambient reflectance (r,g,b)
-	'		vec3 diff;\n' +			// Kd: diffuse reflectance (r,g,b)
-	'		vec3 spec;\n' + 		// Ks: specular reflectance (r,g,b)
-	'		int shiny;\n' +			// Kshiny: specular exponent (integer >= 1; typ. <200)
+
+  //====================structs====================
+  'struct LampT {\n' +    // Describes one point-like Phong light source
+  '   vec3 pos;\n' +      // (x,y,z,w); w==1.0 for local light at x,y,z position
+                          //       w==0.0 for distant light from x,y,z direction 
+  '   vec3 ambi;\n' +     // Ia ==  ambient light source strength (r,g,b)
+  '   vec3 diff;\n' +     // Id ==  diffuse light source strength (r,g,b)
+  '   vec3 spec;\n' +     // Is == specular light source strength (r,g,b)
+  '}; \n' +
+
+	'struct MatlT {\n' +		
+	'		vec3 emit;\n' +			
+	'		vec3 ambi;\n' +			
+	'		vec3 diff;\n' +			
+	'		vec3 spec;\n' + 		
+	'		int shiny;\n' +	
   '		};\n' +
-  //
-	//-------------UNIFORMS: values set from JavaScript before a drawing command.
-  // first light source: (YOU write a second one...)
-	'uniform LampT u_LampSet[2];\n' +		// Array of all light sources.
-	'uniform MatlT u_MatlSet[1];\n' +		// Array of all materials.
-	//
-  'uniform vec3 u_eyePosWorld; \n' + 	// Camera/eye location in world coords.
+  //====================structs====================
+	
+
+  'attribute vec4 a_Position; \n' +		
+  'attribute vec4 a_Normal; \n' +	
+
+
+  //====================light====================
+  'uniform LampT u_LampSet[2];\n' +
+  //====================light====================
+
+
+  //====================material====================
+  'uniform MatlT u_MatlSet[1];\n' +
+  //====================material====================
+
+
+  //====================shading/lighting mode====================
+  'uniform int SLmode;\n' +
+  //====================shading/lighting mode====================
+
+
+
+  'uniform vec3 u_eyePosWorld; \n' +
+
+  'uniform mat4 u_ModelMatrix; \n' +
+  'uniform mat4 u_ViewMatrix;\n' +
+  'uniform mat4 u_ProjMatrix;\n' + 		
+  'uniform mat4 u_NormalMatrix; \n' +   //transformation matrix
+
+
+  'varying vec4 v_Color;\n' +
+  'varying vec3 v_Kd; \n' +
+  'varying vec4 v_Position; \n' +
+  'varying vec3 v_Normal; \n' +
+
+  'void main() {\n' +
+
+  '  gl_Position = u_ProjMatrix * u_ViewMatrix * u_ModelMatrix * a_Position;\n' +
+
+  //====================Gouraud Shading && Blinn-Phong Lighting====================
+
+  '  if(SLmode==1){\n' +
+
+
+  '    vec3 normal = normalize(vec3(u_NormalMatrix * a_Normal));\n'+
+
+  '    vec4 vertexPosition = u_ModelMatrix * a_Position;\n' +
+
+  '    vec3 lightDirection = normalize(u_LampSet[0].pos - vec3(vertexPosition));\n' +
+
+  '    vec3 lightDirection1 = normalize(u_LampSet[1].pos - vec3(vertexPosition));\n' +
+
+  '    vec3 eyeDirection = normalize(u_eyePosWorld - v_Position.xyz); \n' +
+
+
+  '    float nDotL = max(dot(lightDirection, normal), 0.0);\n'+
+
+  '    float nDotL1 = max(dot(lightDirection1, normal), 0.0); \n' +
+
+  '  vec3 H = normalize(lightDirection + eyeDirection); \n' +
+
+  '  float nDotH = max(dot(H, normal), 0.0); \n' +
+
+  '  vec3 H1 = normalize(lightDirection1 + eyeDirection); \n' +
+
+  '  float nDotH1 = max(dot(H1, normal), 0.0); \n' +
+
+  '  float e64 = pow(nDotH, float(u_MatlSet[0].shiny));\n' +
+
+  '  float e641 = pow(nDotH1, float(u_MatlSet[0].shiny));\n' +
+
+  '  vec3 emissive = u_MatlSet[0].emit;' +
+
+  '  vec3 ambient = (u_LampSet[0].ambi + u_LampSet[1].ambi) * u_MatlSet[0].ambi;\n' +
+
+  '  vec3 diffuse = u_LampSet[0].diff  * u_MatlSet[0].diff * nDotL + u_LampSet[1].diff * u_MatlSet[0].diff * nDotH1;\n' +
+
+  '  vec3 speculr = u_LampSet[0].spec * u_MatlSet[0].spec * e64 + u_LampSet[1].spec * u_MatlSet[0].spec * e641;\n' +
+
+  '  v_Color = vec4(emissive + ambient + diffuse + speculr, 1.0);\n' +
+
+
+  '  }\n'+
+   //====================Gouraud Shading && Blinn-Phong Lighting====================
+
+
+    //====================Gouraud Shading && Phong Lighting====================
+
+  '  if(SLmode==2){\n' +
+
+
+  '    vec3 normal = normalize(vec3(u_NormalMatrix * a_Normal));\n'+
+
+  '    vec4 vertexPosition = u_ModelMatrix * a_Position;\n' +
+
+  '    vec3 lightDirection = normalize(u_LampSet[0].pos - vec3(vertexPosition));\n' +
+
+  '    vec3 lightDirection1 = normalize(u_LampSet[1].pos - vec3(vertexPosition));\n' +
+
+  '    float d = length(lightDirection);\n' +
+
+  '    float d1 = length(lightDirection1);\n' +
+
+  '    float nDotL = max(dot(lightDirection, normal), 0.0);\n'+
+
+  '    float nDotL1 = max(dot(lightDirection1, normal), 0.0); \n' +
+
+
+  '  vec3 L = lightDirection;\n' +
+
+  '  vec3 V = -vec3(vertexPosition);\n' +
+
+  '  vec3 l = normalize(L);\n' +
+
+  '  vec3 n = normal;\n' +
+
+  '  vec3 v = normalize(V);\n' +
+
+  '  vec3 R = reflect(l, n);\n' +
+
+
+  '  vec3 L1 = lightDirection1;\n' +
+
+  '  vec3 V1 = -vec3(vertexPosition);\n' +
+
+  '  vec3 l1 = normalize(L1);\n' +
+
+  '  vec3 n1 = normal;\n' +
+
+  '  vec3 v1 = normalize(V1);\n' +
+
+  '  vec3 R1 = reflect(l1, n1);\n' +
+
+
+
+
+  '  float shininess = float(u_MatlSet[0].shiny);\n' +
+
+  '  float specular = pow( max(0.0,dot(R,v)), shininess/4.0);\n' +
+
+  '  float specular1 = pow( max(0.0,dot(R1,v1)), shininess/4.0);\n' +
+
+
+  '  vec3 emissive = u_MatlSet[0].emit;' +
+
+  '  vec3 ambient = (u_LampSet[0].ambi + u_LampSet[1].ambi) * u_MatlSet[0].ambi;\n' +
+
+  '  vec3 diffuse = u_LampSet[0].diff * u_MatlSet[0].diff * nDotL + u_LampSet[1].diff * u_MatlSet[0].diff * nDotL1; \n' +
+
+  '  vec3 speculr = u_LampSet[0].spec  * u_MatlSet[0].spec * specular + u_LampSet[1].spec * u_MatlSet[0].spec * specular1;\n' +
+
+  '  v_Color = vec4(emissive + ambient + diffuse + speculr, 1.0);\n' +
+
+  '  }\n'+
+   //====================Gouraud Shading && Phong Lighting====================
+
+
+
+
+
+   //====================Phong Shading && Blinn-Phong Lighting====================
+  '  if(SLmode==3){\n' +
+
+  '  v_Position = u_ModelMatrix * a_Position; \n' +
+
+  '  v_Normal = normalize(vec3(u_NormalMatrix * a_Normal));\n' +
+
+  '  v_Kd = u_MatlSet[0].diff; \n' +  
+
+  '  }\n'+
+    //====================Phong Shading && Blinn-Phong Lighting====================
+
+
+
+   //====================Phong Shading && Phong Lighting====================
+  '  if(SLmode==4){\n' +
+
+  '  v_Position = u_ModelMatrix * a_Position; \n' +
+
+  '  v_Normal = normalize(vec3(u_NormalMatrix * a_Normal));\n' +
+
+  '  v_Kd = u_MatlSet[0].diff; \n' +  
+
+  '  }\n'+
+    //====================Phong Shading && Phong Lighting====================
+
   
- 	//-------------VARYING:Vertex Shader values sent per-pix'''''''''''''''';el to Fragment shader: 
-  'varying vec3 v_Normal;\n' +				// Find 3D surface normal at each pix
-  'varying vec4 v_Position;\n' +			// pixel's 3D pos too -- in 'world' coords
-  'varying vec3 v_Kd;	\n' +						// Find diffuse reflectance K_d per pix
-  													// Ambient? Emissive? Specular? almost
-  													// NEVER change per-vertex: I use 'uniform' values
+
+  '}\n';
+
+
+// Fragment shader program
+var FSHADER_SOURCE =
+
+  'precision highp float;\n' +
+  'precision highp int;\n' +
+  
+//====================structs====================
+  'struct LampT {\n' +    // Describes one point-like Phong light source
+  '   vec3 pos;\n' +      // (x,y,z,w); w==1.0 for local light at x,y,z position
+                          //       w==0.0 for distant light from x,y,z direction 
+  '   vec3 ambi;\n' +     // Ia ==  ambient light source strength (r,g,b)
+  '   vec3 diff;\n' +     // Id ==  diffuse light source strength (r,g,b)
+  '   vec3 spec;\n' +     // Is == specular light source strength (r,g,b)
+  '}; \n' +
+
+  'struct MatlT {\n' +    
+  '   vec3 emit;\n' +     
+  '   vec3 ambi;\n' +     
+  '   vec3 diff;\n' +     
+  '   vec3 spec;\n' +     
+  '   int shiny;\n' + 
+  '   };\n' +
+  //====================structs====================
+
+
+  //====================light====================
+  'uniform LampT u_LampSet[2];\n' +
+  //====================light====================
+
+
+  //====================material====================
+  'uniform MatlT u_MatlSet[1];\n' +
+  //====================material====================
+
+
+  //====================shading/lighting mode====================
+  'uniform int SLmode;\n' +
+  //====================shading/lighting mode====================
+
+
+  'uniform vec3 u_eyePosWorld; \n' +
+
+
+
+  'varying vec4 v_Color;\n' +
+
+  'varying vec3 v_Normal;\n' +  
+
+  'varying vec4 v_Position;\n' +  
+
+  'varying vec3 v_Kd; \n' + 
+
 
   'void main() { \n' +
-     	// Normalize! !!IMPORTANT!! TROUBLE if you don't! 
-     	// normals interpolated for each pixel aren't 1.0 in length any more!
-	'  vec3 normal = normalize(v_Normal); \n' +
-//	'  vec3 normal = v_Normal; \n' +
-     	// Find the unit-length light dir vector 'L' (surface pt --> light):
-	'  vec3 lightDirection = normalize(u_LampSet[0].pos - v_Position.xyz);\n' +
-	'  vec3 lightDirection1 = normalize(u_LampSet[1].pos - v_Position.xyz);\n' +
-			// Find the unit-length eye-direction vector 'V' (surface pt --> camera)
-  '  vec3 eyeDirection = normalize(u_eyePosWorld - v_Position.xyz); \n' +
-     	// The dot product of (unit-length) light direction and the normal vector
-     	// (use max() to discard any negatives from lights below the surface) 
-     	// (look in GLSL manual: what other functions would help?)
-     	// gives us the cosine-falloff factor needed for the diffuse lighting term:
-	'  float nDotL = max(dot(lightDirection, normal), 0.0); \n' +
-	'  float nDotL1 = max(dot(lightDirection1, normal), 0.0); \n' +
-  	 	// The Blinn-Phong lighting model computes the specular term faster 
-  	 	// because it replaces the (V*R)^shiny weighting with (H*N)^shiny,
-  	 	// where 'halfway' vector H has a direction half-way between L and V
-  	 	// H = norm(norm(V) + norm(L)).  Note L & V already normalized above.
-  	 	// (see http://en.wikipedia.org/wiki/Blinn-Phong_shading_model)
-	'  vec3 H = normalize(lightDirection + eyeDirection); \n' +
-	'  float nDotH = max(dot(H, normal), 0.0); \n' +
-	'  vec3 H1 = normalize(lightDirection1 + eyeDirection); \n' +
-	'  float nDotH1 = max(dot(H1, normal), 0.0); \n' +
-			// (use max() to discard any negatives from lights below the surface)
-			// Apply the 'shininess' exponent K_e:
-			// Try it two different ways:		The 'new hotness': pow() fcn in GLSL.
-			// CAREFUL!  pow() won't accept integer exponents! Convert K_shiny!  
-	'  float e64 = pow(nDotH, float(u_MatlSet[0].shiny));\n' +
-	'  float e641 = pow(nDotH1, float(u_MatlSet[0].shiny));\n' +
- 	// Calculate the final color from diffuse reflection and ambient reflection
-//  '	 vec3 emissive = u_Ke;' +
- '	 vec3 emissive = u_MatlSet[0].emit;' +
+
+  //====================Gouraud Shading && Blinn-Phong Lighting====================
+
+  '  if(SLmode==1){\n' +
+
+  '    gl_FragColor = v_Color;\n'+
+
+  '  }\n'+
+  //====================Gouraud Shading && Blinn-Phong Lighting====================
+
+
+  //====================Gouraud Shading && Phong Lighting====================  
+  '  if(SLmode==2){\n' +
+
+  '    gl_FragColor = v_Color;\n'+
+
+  '  }\n'+
+  //====================Gouraud Shading && Phong Lighting====================  
+
+
+
+
+   //====================Phong Shading && Blinn-Phong Lighting====================
+
+
+  '  if(SLmode==3){\n' +
+
+
+  '    vec3 normal = normalize(v_Normal);\n'+
+
+  '    vec3 lightDirection = normalize(u_LampSet[0].pos - v_Position.xyz);\n' +
+
+  '    vec3 lightDirection1 = normalize(u_LampSet[1].pos - v_Position.xyz);\n' +
+
+  '    vec3 eyeDirection = normalize(u_eyePosWorld - v_Position.xyz); \n' +
+
+
+
+  '    float nDotL = max(dot(lightDirection, normal), 0.0);\n'+
+
+  '    float nDotL1 = max(dot(lightDirection1, normal), 0.0); \n' +
+
+  '  vec3 H = normalize(lightDirection + eyeDirection); \n' +
+
+  '  float nDotH = max(dot(H, normal), 0.0); \n' +
+
+  '  vec3 H1 = normalize(lightDirection1 + eyeDirection); \n' +
+
+  '  float nDotH1 = max(dot(H1, normal), 0.0); \n' +
+
+  '  float e64 = pow(nDotH, float(u_MatlSet[0].shiny));\n' +
+
+  '  float e641 = pow(nDotH1, float(u_MatlSet[0].shiny));\n' +
+
+  '  vec3 emissive = u_MatlSet[0].emit;' +
+
   '  vec3 ambient = (u_LampSet[0].ambi + u_LampSet[1].ambi) * u_MatlSet[0].ambi;\n' +
-  '  vec3 diffuse = (u_LampSet[0].diff + u_LampSet[1].diff) * v_Kd * nDotL;\n' +
-  '	 vec3 speculr = (u_LampSet[0].spec + u_LampSet[1].spec) * u_MatlSet[0].spec * e64;\n' +
-  '  gl_FragColor = vec4(emissive + ambient + diffuse + speculr , 1.0);\n' +
+
+  '  vec3 diffuse = u_LampSet[0].diff  * u_MatlSet[0].diff * nDotL + u_LampSet[1].diff * u_MatlSet[0].diff * nDotH1;\n' +
+
+  '  vec3 speculr = u_LampSet[0].spec * u_MatlSet[0].spec * e64 + u_LampSet[1].spec * u_MatlSet[0].spec * e641;\n' +
+
+  '  gl_FragColor = vec4(emissive + ambient + diffuse + speculr, 1.0);\n' +
+
+
+  '  }\n'+
+
+   //====================Phong Shading && Blinn-Phong Lighting====================
+
+
+    //====================Phong Shading && Phong Lighting====================
+
+  '  if(SLmode==4){\n' +
+
+  '    vec3 normal = normalize(v_Normal);\n'+
+
+  '    vec3 lightDirection = normalize(u_LampSet[0].pos - v_Position.xyz);\n' +
+
+  '    vec3 lightDirection1 = normalize(u_LampSet[1].pos - v_Position.xyz);\n' +
+
+  '    float d = length(lightDirection);\n' +
+
+  '    float d1 = length(lightDirection1);\n' +
+
+  '    float nDotL = max(dot(lightDirection, normal), 0.0);\n'+
+
+  '    float nDotL1 = max(dot(lightDirection1, normal), 0.0); \n' +
+
+
+  '  vec3 L = lightDirection;\n' +
+
+  '  vec3 V = -vec3(v_Position);\n' +
+
+  '  vec3 l = normalize(L);\n' +
+
+  '  vec3 n = normal;\n' +
+
+  '  vec3 v = normalize(V);\n' +
+
+  '  vec3 R = reflect(l, n);\n' +
+
+
+  '  vec3 L1 = lightDirection1;\n' +
+
+  '  vec3 V1 = -vec3(v_Position);\n' +
+
+  '  vec3 l1 = normalize(L1);\n' +
+
+  '  vec3 n1 = normal;\n' +
+
+  '  vec3 v1 = normalize(V1);\n' +
+
+  '  vec3 R1 = reflect(l1, n1);\n' +
+
+
+
+
+  '  float shininess = float(u_MatlSet[0].shiny);\n' +
+
+  '  float specular = pow( max(0.0,dot(R,v)), shininess/4.0);\n' +
+
+  '  float specular1 = pow( max(0.0,dot(R1,v1)), shininess/4.0);\n' +
+
+
+  '  vec3 emissive = u_MatlSet[0].emit;' +
+
+  '  vec3 ambient = (u_LampSet[0].ambi + u_LampSet[1].ambi) * u_MatlSet[0].ambi;\n' +
+
+  '  vec3 diffuse = u_LampSet[0].diff * u_MatlSet[0].diff * nDotL + u_LampSet[1].diff * u_MatlSet[0].diff * nDotL1; \n' +
+
+  '  vec3 speculr = u_LampSet[0].spec  * u_MatlSet[0].spec * specular + u_LampSet[1].spec * u_MatlSet[0].spec * specular1;\n' +
+
+  '  gl_FragColor = vec4(emissive + ambient + diffuse + speculr, 1.0);\n' +
+
+
+  '  }\n'+
+
+
+     //====================Phong Shading && Phong Lighting====================
+
+
   '}\n';
-//=============================================================================
-// REMAINING GLOBAL VARIABLES   (absorb them into objects, please!)
-//=============================================================================
+
+
+
+// REMAINING GLOBAL VARIABLES
+var SLmode = false;   
+
 // Global vars for mouse click-and-drag for rotation.
 var isDrag=false;		// mouse-drag: true when user holds down mouse button
 var xMclik=0.0;			// last mouse button-down position (in CVV coords)
@@ -282,8 +458,6 @@ var currentAngle = 0;
 var g_EyeX = 0.0, g_EyeY = 0.25, g_EyeZ = 4.25; 
 
 
-// ---------------END of global vars----------------------------
-
 //=============================================================================
 function main() {
   // Retrieve <canvas> element
@@ -302,25 +476,26 @@ function main() {
     return;
   }
 
-  // 
-  n_vcount = initVertexBuffers(gl);		// vertex count.
+  SLmode = gl.getUniformLocation(gl.program, 'SLmode');
+   if (!SLmode) { 
+    console.log('Failed to Get the storage locations of SLmode');
+    return;
+  }
+  slmode = 4;
+  gl.uniform1i(SLmode,slmode);
+
+  n_vcount = initVertexBuffers(gl);   // vertex count.
   if (n_vcount < 0) {
     console.log('Failed to set the vertex information: n_vcount false');
     return;
-  }
+  } 
+ 
 
   // Set the clear color and enable the depth test
   gl.clearColor(0.4, 0.4, 0.4, 1.0);
   gl.enable(gl.DEPTH_TEST);
 
-	// Register the Mouse & Keyboard Event-handlers-------------------------------
-	// If users move, click or drag the mouse, or they press any keys on the 
-	// the operating system will sense them immediately as 'events'.  
-	// If you would like your program to respond to any of these events, you must // tell JavaScript exactly how to do it: you must write your own 'event 
-	// handler' functions, and then 'register' them; tell JavaScript WHICH 
-	// events should cause it to call WHICH of your event-handler functions.
-	//
-	// First, register all mouse events found within our HTML-5 canvas:
+
   canvas.onmousedown	=	function(ev){myMouseDown( ev, gl, canvas) }; 
   
   					// when user's mouse button goes down call mouseDown() function
@@ -336,16 +511,10 @@ function main() {
 	window.addEventListener("keydown", myKeyDown, false);
 	window.addEventListener("keyup", myKeyUp, false);
 	window.addEventListener("keypress", myKeyPress, false);
-  // The 'keyDown' and 'keyUp' events respond to ALL keys on the keyboard,
-  // 			including shift,alt,ctrl,arrow, pgUp, pgDn,f1,f2...f12 etc. 
-  //			I find these most useful for arrow keys; insert/delete; home/end, etc.
-  // The 'keyPress' events respond only to alpha-numeric keys, and sense any 
-  //  		modifiers such as shift, alt, or ctrl.  I find these most useful for
-  //			single-number and single-letter inputs that include SHIFT,CTRL,ALT.
-	// END Mouse & Keyboard Event-Handlers-----------------------------------
 
-  // Create, save the storage locations of uniform variables: ... for the scene
-  // (Version 03: changed these to global vars (DANGER!) for use inside any func)
+
+
+
   uLoc_eyePosWorld  = gl.getUniformLocation(gl.program, 'u_eyePosWorld');
   uLoc_ModelMatrix  = gl.getUniformLocation(gl.program, 'u_ModelMatrix');
   //uLoc_MvpMatrix    = gl.getUniformLocation(gl.program, 'u_MvpMatrix');
@@ -439,8 +608,8 @@ function winResize() {
 
   
   //Make canvas fill the top 3/4 of our browser window:
-  nuCanvas.width = Math.min(innerWidth*0.75, innerHeight*1.5);
-  nuCanvas.height = Math.min(innerWidth*0.75/2, innerHeight*0.75);
+  nuCanvas.width = innerWidth; //Math.min(innerWidth, innerHeight*1.5);
+  nuCanvas.height = Math.min(innerWidth/2, innerHeight*0.75);
   //IMPORTANT!  need to re-draw screen contents
   draw();
 }
@@ -471,25 +640,13 @@ function animate(angle)
 
 // ... for our first material:
 var matlSel0= MATL_RED_PLASTIC;				// see keypress(): 'm' key changes matlSel
-/*
-var matlSel1 = (matlSel0 +1)%MATL_DEFAULT;
-var matlSel2 = (matlSel0 +2)%MATL_DEFAULT;
-var matlSel3 = (matlSel0 +5)%MATL_DEFAULT;
-*/
+
 var matl0 = new Material(matlSel0);
-/*
-matl0.setMatl(matlSel0);
-var matl1 = new Material(matlSel1);
-matl1.setMatl(matlSel1);
-var matl2 = new Material(matlSel2);
-matl2.setMatl(matlSel2);
-var matl3 = new Material(matlSel3);
-matl3.setMatl(matlSel3);
-*/
+
 function draw() {
 //-------------------------------------------------------------------------------
 	// Clear color and depth buffer
-  	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 	gl.viewport(0,                              // Viewport lower-left corner
                 0,                              // (x,y) location(in pixels)
               //gl.drawingBufferWidth/2,
@@ -500,6 +657,7 @@ function draw() {
   ViewMatrix.setLookAt(g_EyeX, g_EyeY, g_EyeZ,  // eye position
                         0, 0, 0,                // look-at point (origin)
                         0, 1, 0);               // up vector (+y)
+  lamp1.I_pos.elements.set([g_EyeX, g_EyeY, g_EyeZ]);
 
   gl.uniformMatrix4fv(uLoc_ViewMatrix, false, ViewMatrix.elements);
   // Calculate the view projection matrix
@@ -765,7 +923,7 @@ function draw() {
 
   gl.uniformMatrix4fv(uLoc_ViewMatrix, false, ViewMatrix.elements);
 
-  gl.drawArrays(gl.LINES,             // use this drawing primitive, and
+  gl.drawArrays(gl.TRIANGLE_STRIP,             // use this drawing primitive, and
                   gndStart/floatsPerVertex, // start at this vertex number, and
                   gndVerts.length/floatsPerVertex);   // draw this many vertices
 
@@ -1479,15 +1637,10 @@ function lightSwitch1()
 	}
 	else
 	{
-		lightStatus1 = true;
+		lightStatus1 = true;2
 		//lamp0.I_pos.elements.set( [6.0, 5.0, 5.0]);
   		lamp1.I_ambi.elements.set([0.4, 0.4, 0.4]);
   		lamp1.I_diff.elements.set([1.0, 1.0, 1.0]);
   		lamp1.I_spec.elements.set([1.0, 1.0, 1.0]);
 	}
 }
-
-
-
-
-
